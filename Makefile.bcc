@@ -1,0 +1,34 @@
+CC=		bcc
+AS86=		as86
+DATE=		1998-06-30
+CFLAGS=		-ansi -DNODOS -DUSECMOS -DID="$(DATE)" -Md -M
+
+cvt100:		comio.o cvt100.o fileio.o keyio.o vidio.o vtsetup.o vttio.o int.o start.o
+		$(CC) $(CFLAGS) -o cvt100 *.o -lc_s
+
+comio.o:	comio.c
+		$(CC) $(CFLAGS) -c $*.c
+
+cvt100.o:	cvt100.c
+		$(CC) $(CFLAGS) -c $*.c
+
+fileio.o:	fileio.c
+		$(CC) $(CFLAGS) -c $*.c
+
+keyio.o:	keyio.c
+		$(CC) $(CFLAGS) -c $*.c
+
+vidio.o:	vidio.c
+		$(CC) $(CFLAGS) -c $*.c
+
+vtsetup.o:	vtsetup.c
+		$(CC) $(CFLAGS) -c $*.c
+
+vttio.o:	vttio.c
+		$(CC) $(CFLAGS) -c $*.c
+
+int.o:		int.c
+		$(CC) $(CFLAGS) -c $*.c
+
+start.o:	start.s
+		$(AS86) -o start.o $*.s

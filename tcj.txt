@@ -1,0 +1,194 @@
+An embeddable VT100 emulator for PCs
+
+It all started with a Bull Netstation which had been given to my
+colleague. This is a diskless computer containing a 386, memory, video
+adapter and Ethernet interface. Apparently it had been manufactured
+in Australia under license from 3Com. It booted diskless using a
+proprietary protocol called EtherStart, the code for which was embedded
+in the onboard PROM. Most likely it ran some variety of DOS talking
+to a Novell Netware server.  My colleague replaced EtherStart with the
+Etherboot software, which I maintain (http://etherboot.sourceforge.net/)
+so that it used IP booting protocols. Using that he got Linux running
+on the Netstation. That is a long story in itself and you can view the
+results here (http://etherboot.sourceforge.net/bull/).
+
+Following that success, my colleague was given another box, this
+time a NetCom Netstation. Opening up the box revealed an 8088, some
+memory and an Arcnet controller. Since Linux does not run on 8088s,
+my colleague lost interest in it and passed the box to me. The Arcnet
+precluded using it on my Ethernet network so I pondered for a while what
+I could do with it.  I dumped the onboard BIOS and noticed it contained
+something SCOtty, which I assumed was a terminal emulator. Well, why
+not get code for a VT100 emulator and put that on the PROM instead? I
+should mention that one of my obsessions is to see old hardware put to
+good use. In particular I am concerned about the numbers of XTs, ATs,
+and recently 386 boxes that are turned into scrap metal. I maintain a
+page where I keep a list of software that can be run on these old machines
+(http://members.xoom.com/ken_yap/). An embeddable terminal
+emulator would be a nice addition to the list and a small contribution
+to the world.
+
+Enquiries on the net elicited a pointer to the Simtel archive where I
+found a package called CVT100, by Jerry Joplin. This was a DOS program,
+with open sources in Turbo-C 1.5, that emulated a VT100 on a PC. I
+found that it was fairly modular; all the file handling routines are
+concentrated in one file. I anticipated that I would have to strip out
+file services and the odd service or two to make it run without DOS.
+
+My plan of attack was this: First make the program compile under Turbo-C
+2.0 as a DOS program. Next, turn it into a COM program that can be loaded
+without DOS from a special boot block loader on a floppy disk. Finally,
+make a version that can be embedded in an extension BIOS.
+
+The first stage went by fairly uneventfully. The original source had
+some syntax errors that Turbo-C 1.5 let slip by. Also it was case
+insensitive. After correcting those errors, it compiled under Turbo-C
+2.0 and ran on my PC.
+
+Next, I ifdefed out all the file handling routines and compiled to a
+COM program. I prepended this with a boot loader I have handy called
+comboot. This loads the 64kB after the boot block into memory at 0x10000
+and does a far jump to it. Actually because COM files are linked to
+begin at offset 0x100, it does a far jump to 0xfff0:0x100.
+
+Well it worked, sort of. The banner line appeared and the function keys
+worked but it didn't receive any characters. The serial interrupt was
+not working.  I changed the code temporarily to use polling and that
+worked so it wasn't anything wrong with the program. I read all about
+the 8250 UART and the 8259 interrupt controller but it didn't look like
+I was doing anything wrong. In desparation I fired off an inquiry to the
+net and got some helpful hints but no real answers. Finally I decided
+to trace the program with debug and lo and behold, it was making a call
+to interrupt 0x21 in the getvect and setvect routines. Now interrupt
+0x21 is not provided by the BIOS but by DOS. No DOS, hence no working
+getvect and setvect. I had blithely assumed that getvect and setvect
+were implemented by reading and writing low memory directly. But the
+Turbo-C runtime library implementation uses the DOS call to do the work.
+
+SIDEBAR: Interrupt vectors in the PC are located at memory locations
+0 to 1023. There are 256 vectors in all, each consisting of a 4 byte
+segment:offset address of the interrupt service routines (ISR). Some
+interrupt vectors are dedicated to hardware. Others are software
+interrupts used by software to contact the kernel or drivers. For
+example, COM1, which normally uses IRQ4, is vectored to interrupt 12. The
+address of the vector is then 12 * 4 or 48 = 0x30. Thus the addresses
+0x30 through 0x33 should contain the segment:offset address of the
+ISR for COM1. The ISR should acknowledge the interrupt by sending 0x20
+to the 8259 interrupt controller. If a high interrupt (8 through 15)
+is involved, the secondary interrupt controller should also be sent an
+acknowledgement. The last thing the interrupt routine should do is a
+RETI instead of a RET. This is automatically arranged if the routine is
+declared as an interrupt handler in Turbo-C or Borland-C. END SIDEBAR.
+
+Lesson 1: Know what your runtime library routines are doing underneath
+your program.
+
+Now that I got that working I tried to run it on an XT. I had been doing
+the testing on an AT all along. Again I was stopped short. It wouldn't
+even present the banner. An examination of the startup routines (provided
+in source form as c0.asm by Borland) showed that that made several calls
+to DOS interrupt 0x21 services. On the AT those calls must have been
+benign but on the XT they crashed the program. The fix was to write my
+own version of the startup routines. As a side benefit, it reduced the
+size of the program sufficiently that it would fit on a 16kB PROM.
+
+Another try on the XT. This time the banner came up but the keys didn't
+work. Another session with the debugger showed that the problem was in
+the runtime library routine bioskey(). I had assumed from the name that
+it only called the BIOS interrupt 0x16 service.  However it was also
+calling a DOS service to check for Control-Break. So it crashed the
+first time it tried to get a key. I replaced the routine with a direct
+call to BIOS interrupt 0x16 (getkey).
+
+Lesson 2: Don't make assumptions about what the library routine is doing
+from the documentation. It's best if you can have the source to look at,
+if not...
+
+Lesson 3: Debug and link maps are your friends.
+
+Now that it worked as a standalone program on an XT I could make
+it embeddable. Fortunately I already had the tools for this from my
+Etherboot project. In Etherboot, a boot PROM contains the preamble,
+a small relocating routine and then the application program.
+
+SIDEBAR: Extension BIOSes are a mechanism for adding firmware to a PC.
+An extension BIOS is located on any 2kB boundary between 0xC0000 and
+0xF0000. There is a signature mechanism for identifying extension BIOSes
+so that random patterns of bits do not cause a spurious hit. The extension
+BIOS should contain 55 AA in the first two bytes and the third byte should
+contain the number of bytes in the extension BIOS divided by 512. Finally
+all the bytes in the extension BIOS should sum to 8 bits of zero. There
+does not have to be any particular byte designated as the checksum, it
+is only necessary for the sum of all the bytes to be zero. Typically an
+unused byte somewhere is varied so that the sum comes out to zero before
+making the ROM.
+
+During the power on self-test (POST) sequence, the main BIOS scans in
+the region mentioned above. When it finds an extension BIOS that passes
+the check, it does a far call to the 3rd byte of the extension BIOS.
+
+However many extension BIOSes do not perform their main task at this
+point. They do some initialisation and then plant an entry vector
+in interrupt 0x19 (boot system), chaining the old vector behind it.
+Interrupt 0x19 is called when the computer is ready to boot. Normally
+this vectors to a routine to boot from a disk. The reason for doing
+things in two steps is to allow the main BIOS and any extensions BIOSes
+behind it to complete their initialisation before the system is booted.
+
+At the point that the body of the extension BIOS is called, the segment
+registers are undefined except for CS, which points to the segment
+containing the BIOS. Thus the startup routine must initialise all other
+segment registers. Also the code is executing from ROM. C programs
+generally have a segment of uninitialised data, which must live in
+RAM. Additionally, the initialised data may or may not be writable,
+depending on whether strict ANSI-C semantics have been adhered to. To
+get around these problems, the relocating loader in front of the terminal
+emulator code copies the program to RAM and executes there.
+
+The advantage of using an extension BIOS is that the main BIOS provides
+some basic services and handles the initialisation of chips on the
+board. Thus the experimenter has a ready-made platform to test programs
+on.
+
+How does one physically install an extension BIOS? Traditionally
+extension BIOSes are found on XT disk controllers, VGA boards, SCSI
+adapters and network cards. In the last case they are called boot ROMs.
+On some motherboards, especially XTs, you may find spare ROM slots.
+These are generally used for additional BIOS ROMs as they are located
+in the 0xF0000 region.  Another alternative is to find a defunct board
+of the other types and put the extension BIOS on that. In some cases,
+especially network cards, you may have to enable the ROM with a jumper
+or a soft configuration.  END SIDEBAR.
+
+This part went fairly smoothly, as the tools had already been
+field-tested.  The only change I had to make to the relocating routine was
+because COM images start with IP at 0x100 as previously noted.  So now
+I had an EPROM that I could plug into an XT and it would automatically
+come up with a VT100 terminal emulator.
+
+There are some drawbacks to the terminal emulator. It comes up with
+9600 baud, 8 bits, no parity by default. Unlike a real VT100, different
+settings cannot be made persistent, as there is no non-volatile storage
+on a diskless XT. On an AT, it might be possible to use some unused
+bytes in the CMOS RAM to store settings; I am investigating this.
+
+Dave Baldwin kindly provided me with some changes to make the sources
+ANSI-C compliant so that it would compile under Borland-C 3.1. However
+there are some bugs in BC3.1 relating to the passing of interrupt routines
+as arguments and Dave has some patches that bypass the problem. I was
+fortunate that Turbo-C 2.0 did not have the bugs or it would have been
+harder to debug.
+
+I have made a distribution of the sources and binaries for this project
+which can be found at my Web page.  I hope the tools and techniques
+I have described can help you generate extension BIOSes to make old
+XTs and ATs do embedded tasks. Now that these machines are just scrap,
+they are ideal vehicles for such experiments.
+
+And the Netcom Netstation? Well I discovered that the video adapter on
+board is an EGA, and as I don't have an EGA monitor, I haven't gotten
+around to trying it there.
+
+Ken Yap
+June 1998
+ken_yap@xoommail.com
